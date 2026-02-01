@@ -1,0 +1,1 @@
+[quantity]x[card_code]

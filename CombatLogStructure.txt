@@ -1,0 +1,10 @@
+GAME SETUP:
+[<PLAYER ID>] Mulligan - if mulligan
+[<PLAYER ID>] Hand: [<List of card IDs>]
+[<PLAYER ID>] Board: []
+[<PLAYER ID>] Trash: []
+[<PLAYER ID>] Life: <# of life>
+
+GAMEPLAY:
+
+
