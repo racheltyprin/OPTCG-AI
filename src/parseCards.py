@@ -66,19 +66,35 @@ def timing_counter():
 
 
 #goes through each card and figures out when the effect occurs
-def parse_timing(effectText):
-    if not effectText or effectText.strip() == "-":
-        return ["none"], ""
-    timings = re.findall(r'\[(.*?)\]', effectText)
-    if not timings:
-        return ["immediate"], effectText
-    # Remove timing brackets from text
-    cleaned_text = re.sub(r'\[.*?\]', '', effectText).strip()
-    for t in timings:
-        
-        if (t.lower().replace(" ", "_")) not in timing:
-            timing.append(t)
-    return [t.lower().replace(" ", "_") for t in timings], cleaned_text
+def parse_timing(effectText: str, timingFlags: dict):
+    if not effectText or effectText== "-":
+        return
+    
+    text=effectText.lower()
+    if "[on play]" in text:
+        timingFlags["on_play"] = 1
+    if "[activate: main]" in text:
+        timingFlags["activate_main"] = 1
+    if "[main]" in text:
+        timingFlags["main"] = 1
+    if "[counter]" in text:
+        timingFlags["counter"] = 1
+    if "[when attacking]" in text:
+        timingFlags["when_attacking"] = 1
+    if "[on k.o.]" in text:
+        timingFlags["on_ko"] = 1
+    if "[on block]" in text:
+        timingFlags["on_block"] = 1
+    if "[end of your turn]" in text:
+        timingFlags["end_turn"] = 1
+    if "[opponent's turn]" in text:
+        timingFlags["opponent_turn"] = 1
+    if "end of your opponent's next turn" in text:
+        timingFlags["end_opponents_turn"] = 1
+    
+    return timingFlags
+
+
 
     
 

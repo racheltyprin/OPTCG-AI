@@ -39,7 +39,7 @@ def extra_consolidate():
         cardList = json.load(f)
     for card in (cardList):
         counter += 1
-        if (len(card.get("id"))==8):
+        if (len(card.get("id"))<=8):
             combined_data.append(card)
 
     with open(EXTRA_CONSOLIDATED_CARD_LIST, 'w') as f:
