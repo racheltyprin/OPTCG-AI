@@ -22,17 +22,22 @@ KEYWORD_KEYS = [
 ]
 ACTION_KEYS = [
   "power_change",
+  "cost_change",
   "ko",
   "draw",
   "search",
   "rest",
   "unrest",
   "bounce",
+  "bottom_deck",
   "trash",
   "don_attach",
   "don_remove",
   "life_add",
-  "life_remove"
+  "life_remove",
+  "don_add",
+  "don_remove",
+  "don_restand"
 ]
 CONDITION_KEYS = [
   "don_times", # of don required
@@ -42,4 +47,11 @@ CONDITION_KEYS = [
   "your_turn",
   "opponent_turn",
   "may",
+]
+EFFECT_AMOUNT_KEYS = [
+    "power_change_amount",
+    "cost_change_amount",
+    "draw_amount",
+    "search_amount",
+    "don_restand_amount"
 ]
