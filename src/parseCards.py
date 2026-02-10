@@ -372,9 +372,62 @@ def parse_conditions(effectText: str, conditionsFlags: dict):
 
     return conditionsFlags
 
+def split_cards(text: str):
 
+    parts = []
+    current = []
+    paren_depth = 0
+    bracket_depth = 0
+    brace_depth = 0
 
-    
+    i = 0
+    length = len(text)
+
+    while i < length:
+        char = text[i]
+
+        #track depth (parentheses and brackets)
+        if char == '(':
+            paren_depth += 1
+        elif char == ')':
+            paren_depth -= 1
+        elif char == '[':
+            bracket_depth += 1
+        elif char == ']':
+            bracket_depth -= 1
+        elif char == '{':
+            brace_depth += 1
+        elif char == '}':
+            brace_depth -= 1
+
+        if (
+                char in {'.', ':', ';', ','}
+                and paren_depth == 0
+                and bracket_depth == 0
+                and brace_depth == 0
+            ):
+
+            if text[i:i+4] == "K.O.":
+                current.extend("K.O.")
+                i += 4
+                continue
+
+        part = ''.join(current).strip()
+        if part:
+            parts.append(part)
+        current = []
+        i += 1
+        continue
+
+    current.append(char)
+    i += 1
+
+    last = ''.join(current).strip()
+    if last:
+        parts.append(last)
+
+    return parts
+
 
 
 if __name__ == "__main__":
