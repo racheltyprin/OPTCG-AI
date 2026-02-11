@@ -1,447 +1,219 @@
-import copy
-import json
-import os
-from pathlib import Path
 import re
 import sys
+import os
+from typing import Dict, List, Optional, Any
 
-#combined.json filepaths:
-PARENT_DIRECTORY= os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
-UNCONSOLIDATED_CARD_LIST_FILE = os.path.join(PARENT_DIRECTORY, "data/combined.json")
-CONSOLIDATED_CARD_LIST_FILE = os.path.join(PARENT_DIRECTORY, "data/consolidated.json")
-TIMING_FLAGS = {
-  "on_play": 0,
-  "activate_main": 0,
-  "main": 0,
-  "counter": 0,
-  "when_attacking": 0,
-  "on_ko": 0,
-  "on_block": 0,
-  "end_turn": 0,
-  "opponent_turn": 0,
-  "end_opponent_turn": 0
-}
-KEYWORD_FLAGS = {
-  "rush": 0,
-  "blocker": 0,
-  "double_attack": 0,
-  "banish": 0,
-  "trigger": 0,
-  "rush_character": 0,
-  "unblockable": 0
-}
-EFFECT_ACTION_FLAGS = {
-  "power_change": 0,
-  "cost_change": 0,
-  "ko": 0,
-  "draw": 0,
-  "search": 0,
-  "rest": 0,
-  "unrest": 0,
-  "bounce": 0,
-  "bottom_deck": 0,
-  "trash": 0,
-  "don_attach": 0,
-  "don_remove": 0,
-  "life_add": 0,
-  "life_remove": 0,
-  "don_add": 0,
-  "don_remove": 0
-}
-CONDITIONS = {
-  "don_times": 0, # of don required>,
-  "don_minus": 0, # of don required>,
-  "don_rest": 0, # of don required>,
-  "once_per_turn": 0,
-  "your_turn": 0,
-  "opponent_turn": 0,
-  "may": 0
-}
-EFFECT_AMOUNT_FLAGS = {
-    "power_change_amount": 0,
-    "cost_change_amount": 0,
-    "draw_amount": 0,
-    "search_amount": 0,
-    "don_change_amount": 0,
-}
-OUTPUT_FILE = os.path.join(PARENT_DIRECTORY, "output/parsed_cards_output.txt")
+# Ensure we can find featureslist in the same directory
+sys.path.append(os.path.dirname(__file__))
+from featureslist import TIMING_KEYS, KEYWORD_KEYS, ACTION_KEYS, CONDITION_KEYS, COST_KEYS
 
+class CardEffectParser:
+    def __init__(self):
+        # 1. TIMING PATTERNS
+        self.timing_patterns = {
+            r'\[On Play\]': 'on_play',
+            r'\[When Attacking\]': 'when_attacking',
+            r'\[Activate: Main\]': 'activate_main',
+            r'\[Counter\]': 'counter',
+            r'\[Trigger\]': 'trigger',
+            r'\[Blocker\]': 'blocker',
+            r'\[On K\.O\.\]': 'on_ko',
+            r'\[On Block\]': 'on_block',
+            r'\[On Your Opponent\'s Attack\]': 'on_opponent_attack',
+            r'\[Your Turn\]': 'your_turn',
+            r'\[Opponent\'s Turn\]': 'opponent_turn',
+            r'\[End of Your Turn\]': 'end_of_your_turn',
+            r'\[End of Your Opponent\'s Turn\]': 'end_of_opponent_turn',
+            r'\[Once Per Turn\]': 'once_per_turn',
+            r'\[DON!! x(\d+)\]': 'don_x',
+        }
+        
+        # 2. KEYWORD PATTERNS (These are also passive effects)
+        self.keyword_patterns = {
+            r'\[Rush\]': 'rush',
+            r'\[Rush: Character\]': 'rush',
+            r'\[Blocker\]': 'blocker',
+            r'\[Double Attack\]': 'double_attack',
+            r'\[Banish\]': 'banish',
+            r'\[Unblockable\]': 'unblockable',
+        }
 
-#goes through each card in combined.json and consolidated.json, counts amounts, finds difference
-def card_counter():
-    #load unconsolidated cardlist
-    with open(UNCONSOLIDATED_CARD_LIST_FILE, 'r') as f:
-        cardList = json.load(f)
-    unconsolidatedCounter = 0
-    for card in cardList:
-        unconsolidatedCounter +=1
-    
-    #load consolidated cardlist
-    with open(CONSOLIDATED_CARD_LIST_FILE, 'r') as f:
-        cardList = json.load(f)
-    consolidatedCounter = 0
-    for card in cardList:
-        consolidatedCounter +=1
+    def _extract_amount(self, text: str, default: int = 1) -> int:
+        """Helper to extract the first number found in a string, or return default."""
+        match = re.search(r'([+−-]?\d+)', text)
+        if match:
+            val_str = match.group(1).replace('−', '-')
+            return int(val_str)
+        return default
 
-    print("unconsolidated amount =",unconsolidatedCounter,"; consolidated amount =",consolidatedCounter)
-    print(unconsolidatedCounter-consolidatedCounter)
+    def parse_to_flags(self, text: str) -> Dict[str, Dict[str, int]]:
+        flags = {
+            "timing": {k: 0 for k in TIMING_KEYS},
+            "keywords": {k: 0 for k in KEYWORD_KEYS},
+            "actions": {k: 0 for k in ACTION_KEYS},
+            "conditions": {k: 0 for k in CONDITION_KEYS},
+            "costs": {k: 0 for k in COST_KEYS}
+        }
+        
+        flags["conditions"]["cost_req"] = -999
+        
+        if not text or text == '-':
+            return flags
 
-#go through each card
-def parse_cards():
-    with open(OUTPUT_FILE, 'w') as output:
-        with open(UNCONSOLIDATED_CARD_LIST_FILE, 'r') as f:
-            cardList = json.load(f)
-        for card in cardList:
-            timing_flags = copy.deepcopy(TIMING_FLAGS)
-            keyword_flags = copy.deepcopy(KEYWORD_FLAGS)
-            effect_action_flags = copy.deepcopy(EFFECT_ACTION_FLAGS)
-            effect_amount_flags = copy.deepcopy(EFFECT_AMOUNT_FLAGS)
-            condition_flags = copy.deepcopy(CONDITIONS)
-            
-            timing_flags = parse_timing(card.get("effect"), timing_flags)
-            keyword_flags = parse_keywords(card.get("effect"), keyword_flags)
-            effect_action_flags, effect_amount_flags = parse_effect_action(card.get("effect"), effect_action_flags, effect_amount_flags)
+        # Clean HTML and normalize
+        text_clean = re.sub(r'<[^>]+>', ' ', text)
+        
+        # --- 1. TIMING & KEYWORDS ---
+        for pattern, key in self.timing_patterns.items():
+            match = re.search(pattern, text_clean)
+            if match:
+                if key == 'don_x':
+                    flags["timing"][key] = int(match.group(1))
+                else:
+                    flags["timing"][key] = 1
+        
+        for pattern, key in self.keyword_patterns.items():
+            if re.search(pattern, text_clean):
+                flags["keywords"][key] = 1
+                # Keywords like Banish, Double Attack, Rush, Blocker are passive effects
+                flags["timing"]["passive"] = 1
 
+        # --- 2. PASSIVE DETECTION (Sentences) ---
+        # Split by <br> or periods that are NOT inside brackets or followed by "Then"
+        sentences = [s.strip() for s in re.split(r'<br>|\. (?=\[|This|Your|Opponent|If|All)', text_clean) if s.strip()]
+        for sentence in sentences:
+            # If a sentence starts without a bracketed timing, it's likely a passive effect
+            if not sentence.startswith('[') and not re.search(r'^Then,', sentence):
+                # Check if it contains actual game actions or conditions
+                if re.search(r'cannot|must|gain|is|has|If|can attack', sentence, re.IGNORECASE):
+                    flags["timing"]["passive"] = 1
+                    break
 
-            output.write(f"Card ID: {card.get('id')}\n")
-            output.write(f"Name: {card.get('name')}\n")
-            output.write(f"Effect: {card.get('effect')}\n\n")
-
-            output.write("Timing Flags:\n")
-            for k, v in timing_flags.items():
-                output.write(f"  {k}: {v}\n")
-
-            output.write("\nKeyword Flags:\n")
-            for k, v in keyword_flags.items():
-                output.write(f"  {k}: {v}\n")
-
-            output.write("\nEffect Action Flags:\n")
-            for k, v in effect_action_flags.items():
-                output.write(f"  {k}: {v}\n")
-
-            output.write("\nEffect Amount Flags:\n")
-            for k, v in effect_amount_flags.items():
-                output.write(f"  {k}: {v}\n")
-            
-            output.write("\nCondition Flags:\n")
-            for k, v in condition_flags.items():
-                output.write(f"  {k}: {v}\n")
-
-            output.write("\n" + "-"*60 + "\n\n")
-
-        print(f"Parsing complete! Output written to {output}")
-
- 
-    
-
-
-#goes through effect text and figures fills in timing flags dict for a card
-def parse_timing(effectText: str, timingFlags: dict):
-    if not effectText or effectText== "-":
-        timingFlags
-    
-    text=effectText.lower()
-    if "[on play]" in text:
-        timingFlags["on_play"] = 1
-    if "[activate: main]" in text:
-        timingFlags["activate_main"] = 1
-    if "[main]" in text:
-        timingFlags["main"] = 1
-    if "[counter]" in text:
-        timingFlags["counter"] = 1
-    if "[when attacking]" in text:
-        timingFlags["when_attacking"] = 1
-    if "[on k.o.]" in text or "when this character is k.o.'d" in text:
-        timingFlags["on_ko"] = 1
-    if "[on block]" in text:
-        timingFlags["on_block"] = 1
-    if "[end of your turn]" in text:
-        timingFlags["end_turn"] = 1
-    if "[opponent's turn]" in text:
-        timingFlags["opponent_turn"] = 1
-    if "end of your opponent's next turn" in text:
-        timingFlags["end_opponents_turn"] = 1
-    
-    return timingFlags
-
-#goes through effect text and fills in keyword flags dict for a card
-def parse_keywords(effectText: str, keywordFlags: dict):
-    if not effectText or effectText== "-":
-        return keywordFlags
-    
-    text = effectText.lower()
-
-    if "[rush]" in text:
-        keywordFlags["rush"] = 1
-    if "[blocker]" in text:
-        keywordFlags["blocker"] = 1
-    if "[double attack]" in text:
-        keywordFlags["double_attack"] = 1
-    if "[banish]" in text:
-        keywordFlags["banish"] = 1
-    if "[trigger]" in text: 
-        keywordFlags["trigger"] = 1
-    if "[rush: character]" in text or "can attack Characters on the turn in which it is played" in text:
-        keywordFlags["rush_character"] = 1
-    if "[unblockable]" in text or "cannot activate a [blocker]" in text:
-        keywordFlags["unblockable"] = 1
-    
-    return keywordFlags
-
-#goes through effect text and fills in effect action flags dict for a card
-def parse_effect_action(effectText: str, effectActionFlags: dict, effectAmountFlags):
-    if not effectText or effectText== "-":
-        return effectActionFlags, effectAmountFlags
-
-    text = effectText.lower()
-    text = text.replace('\u2212', '-')
-    text = re.sub(r'\[on k\.o\.\]', '', text)
-    text = text.replace("when this character is k.o.'d", '') 
-    text = re.sub(r'\s+', ' ', text)
-    #remove timing
-    text = re.sub(r'\[[^\]]+\]', '', text)
-    text = text.strip() 
-
-    #power change + amount
-    powerMatch = re.search(r'([+-])(\d+)0{3}', text)
-    if powerMatch:
-        if powerMatch.group(1) == '+':
-            sign = 1
+        # --- 3. SPLIT INTO COST AND EFFECT ---
+        cost_split_match = re.search(r'([^:]*(?:DON!! [−-]\d+|rest this Character|ⓧ|➀|➁|trash \d+ card.*from your hand))[:]', text_clean, re.IGNORECASE)
+        
+        if cost_split_match:
+            cost_part = cost_split_match.group(1)
+            effect_part = text_clean[cost_split_match.end():]
         else:
-            sign = -1
-        magnitude = sign * int(powerMatch.group(2)) * 1000
-        effectActionFlags["power_change"] = 1
-        effectAmountFlags["power_change_amount"] = magnitude
-
-
-    #cost change + amount
-    costMatch = re.search(r'([+-]\d+)\s*cost', text)
-    if costMatch:
-        if costMatch.group(1) == '+':
-            sign = 1
-        else:
-            sign = -1
-        magnitude = sign * int(costMatch.group(1)) * sign
-        effectActionFlags["cost_change"] = 1
-        effectAmountFlags["cost_change_amount"] = magnitude
-
-    #ko effect (not timing)
-    if "k.o." in text:
-        effectActionFlags["ko"] = 1
-
-    #draw effect
-    drawMatch = re.search(r'draw (\d+) card[s]?', text)
-    if drawMatch:
-        drawAmount = int(drawMatch.group(1))
-        effectActionFlags["draw"] = 1
-        effectAmountFlags["draw_amount"] = drawAmount
-
-    #search effect
-    searchMatch = re.search(r'look at (\d+) card[s]? from the top of your deck', text)
-    if searchMatch:
-        searchAmount = int(searchMatch.group(1))
-        effectActionFlags["search"] = 1
-        effectAmountFlags["search_amount"] = searchAmount
-
-    #rest
-    restMatch = re.search(r"rest up to\s+(\d+)\s+of your opponent's characters", text)
-    if restMatch:
-        effectActionFlags["rest"] = 1
-    
-    #restand character
-    unrestMatch = re.search(r"set up to\s+(\d+)\s+of your character[s]?.*?as active", text)
-    if unrestMatch:
-        effectActionFlags["unrest"] = 1
-    
-    #return character to hand 
-    bounceMatch = re.search(r"return\s+up to\s+\d+\s+.*?character[s]?.*?to the owner's hand", text)
-    if bounceMatch:
-        effectActionFlags["bounce"] = 1
-
-    #send character to bottom of deck
-    bottomDeck = re.search(r"place\s+(?:up to\s+)?(\d+)\s+.*?character[s]?.*?at the bottom of the owner's deck", text)
-    if bottomDeck:
-        effectActionFlags["bottom_deck"] = 1
-
-    #trash
-    if "trash" in text:    
-        effectActionFlags["trash"] = 1
-    
-    #give rested don
-    donAttachMatch = re.search(r"give\s+(?:up to\s+)?(\d+)\s+rested\s+don!!\s+card[s]?.*?(?:leader|character)", text)
-    if donAttachMatch:
-        effectActionFlags["don_attach"] = 1
-    
-    #special case: don reattachment
-    reassignMatch = re.search(r"give\s+(?:up to\s+|)(\d+)\s+currently given don!!\s+card[s]?.*?character", text)
-    if reassignMatch:
-        effectActionFlags["don_attach"] = 1
-        effectActionFlags["don_remove"] = 1
-    
-    #don removal
-    donRemoveMatch = re.search(r"return\s+(?:up to\s+|)(\d+)\s+currently given don!!\s+card[s]?.*?cost area", text)
-    if donRemoveMatch:
-        effectActionFlags["don_remove"] = 1
-
-    #life removal
-    lifeRemoveMatch = re.search(r'(?:add|trash|remove)\s+(?:up to\s+)?(\d+)\s+card[s]?\s+from the (?:top|bottom) of your(?: opponent\'s)? life cards',text)
-    if lifeRemoveMatch:
-        effectActionFlags["life_remove"] = 1
-    
-    #life addition
-    lifeAdditionMatch = re.search( r'add\s+(?:up to\s+)?(\d+)\s+card[s]?.*?to the top of your life cards', text)
-    if lifeAdditionMatch:
-        amount = int(lifeAdditionMatch.group(1))
-        effectActionFlags["life_add"] = 1
-        effectAmountFlags["life_add_amount"] = amount
-
-    
-    #special case: life swapping
-    lifeSwapMatch = re.search(r"add\s+(\d+)\s+card[s]?\s+from the (?:top|bottom) of your life cards to your hand", text)
-    if lifeSwapMatch:
-        effectActionFlags["life_remove"] = 1
-        effectActionFlags["life_add"] = 1
-    
-    #don add from don deck
-    donAddMatch = re.search(r'add\s+(?:up to\s+)?(\d+)\s+don!!\s+card[s]?.*?from your don!! deck', text)
-    if donAddMatch:
-        amount = int(donAddMatch.group(1))
-        effectActionFlags["don_add"] = 1
-        effectAmountFlags["don_change_amount"] = amount
-    
-    #don remove to don deck
-    donRemoveMatch = re.search(r'(?:return|returns|may return).*?(\d+)?\s*don!!\s+card[s]?.*?field.*?don!! deck',text)
-    if donRemoveMatch:
-        if donRemoveMatch.group(1):
-            amount = int(donRemoveMatch.group(1))
-        else:
-            amount = 1
-        effectActionFlags["don_change"] = 1
-        effectAmountFlags["don_change_amount"] = -amount
-
-    # DON restand effect
-    donRestandMatch = re.search(r"set up to\s+(\d+)\s+of your don!!\s+cards\s+as active", text)
-    if donRestandMatch:
-        amount = int(donRestandMatch.group(1))
-        effectActionFlags["don_restand"] = 1
-        effectAmountFlags["don_restand_amount"] = amount
-
-    
-    return effectActionFlags, effectAmountFlags
-
-
-
-def parse_conditions(effectText: str, conditionsFlags: dict):
-    if not effectText or effectText == "-":
-        return conditionsFlags
-    
-    text = effectText.lower()
-    text = text.replace('\u2212', '-')  # normalize minus signs
-    text = re.sub(r'\s+', ' ', text)    # collapse whitespace
-
-    # don!! x __ (attached don)
-    donxMatch = re.search(r"\[don!! x(\d+)\]", text)
-    if donxMatch:
-        conditionsFlags["don_times"] = int(donxMatch.group(1))
-
-    # don!! -__ (don sent back to don deck)
-    donMinusMatch = re.search(r"(?:don!! )?-(\d+)", text)
-    if donMinusMatch:
-        conditionsFlags["don_minus"] = int(donMinusMatch.group(1))
-
-    # don __ (don rested)
-    donRestMatch = re.search(r"\u2461", text)
-    if donRestMatch:
-        conditionsFlags["don_rest"] = int(donRestMatch.group(1))
-
-    # once_per_turn: phrases like "once per turn"
-    if "[once per turn]" in text:
-        conditionsFlags["once_per_turn"] = 1
-
-    # your_turn: phrases like "during your turn"
-    if "[your turn]" in text:
-        conditionsFlags["your_turn"] = 1
-
-    # opponent_turn: phrases like "during your opponent's turn"
-    if "[opponent's turn]" in text:
-        conditionsFlags["opponent_turn"] = 1
-
-    # may: catchall for "you may"
-    if "you may" in text:
-        conditionsFlags["may"] = 1
-
-    return conditionsFlags
-
-def split_cards(text: str):
-
-    parts = []
-    current = []
-    paren_depth = 0
-    bracket_depth = 0
-    brace_depth = 0
-
-    i = 0
-    length = len(text)
-
-    while i < length:
-        char = text[i]
-
-        #track depth (parentheses and brackets)
-        if char == '(':
-            paren_depth += 1
-        elif char == ')':
-            paren_depth -= 1
-        elif char == '[':
-            bracket_depth += 1
-        elif char == ']':
-            bracket_depth -= 1
-        elif char == '{':
-            brace_depth += 1
-        elif char == '}':
-            brace_depth -= 1
-
-        if (
-                char in {'.', ':', ';', ','}
-                and paren_depth == 0
-                and bracket_depth == 0
-                and brace_depth == 0
-            ):
-
-            if text[i:i+4] == "K.O.":
-                current.extend("K.O.")
-                i += 4
-                continue
-
-        part = ''.join(current).strip()
-        if part:
-            parts.append(part)
-        current = []
-        i += 1
-        continue
-
-    current.append(char)
-    i += 1
-
-    last = ''.join(current).strip()
-    if last:
-        parts.append(last)
-
-    return parts
-
-
-
-if __name__ == "__main__":
-    if len(sys.argv) > 1:
-        if sys.argv[1] == "parse_cards":
-            if len(sys.argv)>2:
-                parse_cards(sys.argv[2])
+            don_return_match = re.search(r'DON!! [−-]\d+', text_clean)
+            if don_return_match:
+                cost_part = don_return_match.group(0)
+                effect_part = text_clean
             else:
-                parse_cards()
-        elif sys.argv[1] == "parse_timing":
-            parse_timing()
-        elif sys.argv[1] == "card_counter":
-            card_counter()
-        else:
-            print("Unknown command.")
-    else:
-        print("Usage: python script.py [consolidate|reset]")
+                cost_part = ""
+                effect_part = text_clean
+
+        # --- 4. COST PARSING ---
+        if cost_part:
+            if re.search(r'DON!! x(\d+)', cost_part): 
+                flags["costs"]["don_attach"] = self._extract_amount(re.search(r'DON!! x(\d+)', cost_part).group(0))
+            don_minus = re.search(r'DON!! [−-](\d+)', cost_part)
+            if don_minus: 
+                flags["costs"]["don_return"] = int(don_minus.group(1))
+            if re.search(r'[ⓧ➀➁]|rest \d+ of your DON!!', cost_part):
+                if 'ⓧ' in cost_part or '➀' in cost_part: flags["costs"]["don_rest"] = 1
+                elif '➁' in cost_part: flags["costs"]["don_rest"] = 2
+                else: flags["costs"]["don_rest"] = self._extract_amount(cost_part)
+            if re.search(r'trash (\d+) card.*from your hand', cost_part, re.IGNORECASE):
+                flags["costs"]["trash_hand"] = self._extract_amount(cost_part)
+            if re.search(r'trash (\d+) card.*from (?:the top of )?your deck', cost_part, re.IGNORECASE):
+                flags["costs"]["trash_deck"] = self._extract_amount(cost_part)
+            if re.search(r'trash (\d+) card.*from your Life', cost_part, re.IGNORECASE):
+                flags["costs"]["trash_life"] = self._extract_amount(cost_part)
+            if re.search(r'rest this (?:Character|Stage|card)', cost_part, re.IGNORECASE):
+                flags["costs"]["rest_self"] = 1
+            if re.search(r'rest (\d+) of your (?:Characters|cards)', cost_part, re.IGNORECASE):
+                flags["costs"]["rest_other"] = self._extract_amount(cost_part)
+
+        # --- 5. ACTION PARSING ---
+        action_text = re.sub(r'\[[^\]]+\]', '', text_clean)
+        
+        if re.search(r'\bDraw (\d+) card', action_text, re.IGNORECASE):
+            flags["actions"]["draw"] = self._extract_amount(re.search(r'\bDraw (\d+) card', action_text, re.IGNORECASE).group(0))
+        if re.search(r'Look at (\d+) cards', action_text, re.IGNORECASE):
+            flags["actions"]["look"] = self._extract_amount(re.search(r'Look at (\d+) cards', action_text, re.IGNORECASE).group(0))
+        if re.search(r'reveal up to (\d+)', action_text, re.IGNORECASE):
+            flags["actions"]["reveal"] = self._extract_amount(re.search(r'reveal up to (\d+)', action_text, re.IGNORECASE).group(0))
+        if re.search(r'add .* to your hand', action_text, re.IGNORECASE):
+            flags["actions"]["add_to_hand"] = 1
+        if re.search(r'place .* at (?:the )?(?:top|bottom) of (?:your |your opponent\'s )?deck', action_text, re.IGNORECASE):
+            flags["actions"]["place_deck"] = 1
+        if re.search(r'shuffle (?:your |your opponent\'s )?deck', action_text, re.IGNORECASE):
+            flags["actions"]["shuffle"] = 1
+        if re.search(r'\bPlay up to (\d+)', action_text, re.IGNORECASE):
+            flags["actions"]["play"] = self._extract_amount(re.search(r'\bPlay up to (\d+)', action_text, re.IGNORECASE).group(0))
+        if re.search(r'\bRest (?:up to (\d+)|all|the)', action_text, re.IGNORECASE):
+            match = re.search(r'\bRest (?:up to (\d+)|all|the)', action_text, re.IGNORECASE)
+            flags["actions"]["rest"] = 99 if 'all' in match.group(0).lower() else self._extract_amount(match.group(0))
+        if re.search(r'Set (?:up to (\d+)|all|the) .* as active', action_text, re.IGNORECASE):
+            match = re.search(r'Set (?:up to (\d+)|all|the) .* as active', action_text, re.IGNORECASE)
+            flags["actions"]["active"] = 99 if 'all' in match.group(0).lower() else self._extract_amount(match.group(0))
+        if re.search(r'\bK\.O\.', action_text) and not re.search(r'cannot be K\.O\.\'d', action_text, re.IGNORECASE):
+            match = re.search(r'K\.O\. (?:up to (\d+)|all|the)', action_text, re.IGNORECASE)
+            flags["actions"]["ko"] = self._extract_amount(match.group(0)) if match else 1
+        if re.search(r'Remove .* from the field', action_text, re.IGNORECASE):
+            flags["actions"]["remove_field"] = 1
+        if re.search(r'Return .* to (?:the )?owner\'s hand', action_text, re.IGNORECASE):
+            flags["actions"]["return_to_hand"] = 1
+        if re.search(r'Add (\d+) card.* to (?:the )?(?:top|bottom) of .* Life', action_text, re.IGNORECASE):
+            flags["actions"]["add_life"] = self._extract_amount(re.search(r'Add (\d+) card.* to (?:the )?(?:top|bottom) of .* Life', action_text, re.IGNORECASE).group(0))
+        if re.search(r'trash (\d+) card.* from .* Life', action_text, re.IGNORECASE):
+            flags["actions"]["trash_life"] = self._extract_amount(re.search(r'trash (\d+) card.* from .* Life', action_text, re.IGNORECASE).group(0))
+        if re.search(r'Look at (\d+) card.* from .* Life', action_text, re.IGNORECASE):
+            flags["actions"]["look_life"] = self._extract_amount(re.search(r'Look at (\d+) card.* from .* Life', action_text, re.IGNORECASE).group(0))
+        
+        power_match = re.search(r'([+−-])(\d+) power', action_text, re.IGNORECASE)
+        if power_match:
+            val = int(power_match.group(2)) * (1 if power_match.group(1) == '+' else -1)
+            flags["actions"]["give_power"] = val
+        cost_match = re.search(r'([+−-])(\d+) cost', action_text, re.IGNORECASE)
+        if cost_match:
+            val = int(cost_match.group(2)) * (1 if cost_match.group(1) == '+' else -1)
+            flags["actions"]["give_cost"] = val
+        
+        if re.search(r'set up to (\d+) of your DON!! cards as active', action_text, re.IGNORECASE):
+            flags["actions"]["set_don"] = self._extract_amount(re.search(r'set up to (\d+) of your DON!! cards as active', action_text, re.IGNORECASE).group(0))
+        elif re.search(r'Set up to (\d+) of your DON!! cards as active', action_text, re.IGNORECASE):
+            flags["actions"]["set_don"] = self._extract_amount(re.search(r'Set up to (\d+) of your DON!! cards as active', action_text, re.IGNORECASE).group(0))
+        if re.search(r'Add up to (\d+) DON!! card.* from your DON!! deck', action_text, re.IGNORECASE):
+            flags["actions"]["add_don"] = self._extract_amount(re.search(r'Add up to (\d+) DON!! card.* from your DON!! deck', action_text, re.IGNORECASE).group(0))
+        if re.search(r'return (\d+) DON!! card.* to your DON!! deck', action_text, re.IGNORECASE):
+            flags["actions"]["remove_don"] = self._extract_amount(re.search(r'return (\d+) DON!! card.* to your DON!! deck', action_text, re.IGNORECASE).group(0))
+        if re.search(r'Give .* up to (\d+) .* DON!! card', action_text, re.IGNORECASE):
+            flags["actions"]["attach_don"] = self._extract_amount(re.search(r'Give .* up to (\d+) .* DON!! card', action_text, re.IGNORECASE).group(0))
+        
+        if re.search(r'gains? \[?(?:Rush|Blocker|Double Attack|Banish|Unblockable)\]?', action_text, re.IGNORECASE):
+            flags["actions"]["gain_ability"] = 1
+        if re.search(r'cannot attack', action_text, re.IGNORECASE):
+            flags["actions"]["cannot_attack"] = 1
+        if re.search(r'cannot be K\.O\.\'d', action_text, re.IGNORECASE):
+            flags["actions"]["cannot_be_ko"] = 1
+        if re.search(r'must attack', action_text, re.IGNORECASE):
+            flags["actions"]["must_attack"] = 1
+        if re.search(r'Change the attack target', action_text, re.IGNORECASE):
+            flags["actions"]["change_target"] = 1
+        if re.search(r'cannot be removed from the field', action_text, re.IGNORECASE):
+            flags["actions"]["cannot_be_removed"] = 1
+        if re.search(r'can attack Characters on the turn in which (?:it is|they are) played', action_text, re.IGNORECASE):
+            flags["actions"]["can_attack_played_turn"] = 1
+
+        # --- 6. CONDITION PARSING ---
+        if re.search(r'If your Leader', action_text, re.IGNORECASE): flags["conditions"]["leader_req"] = 1
+        if re.search(r'If you have (\d+) or (?:less|more) (?:cards|Life|DON!!)', action_text, re.IGNORECASE):
+            flags["conditions"]["count_req"] = self._extract_amount(action_text)
+        if re.search(r'If the number of DON!!', action_text, re.IGNORECASE): flags["conditions"]["don_req"] = 1
+        if re.search(r'If you have (?:no other|a) .* Character', action_text, re.IGNORECASE): flags["conditions"]["character_req"] = 1
+        if re.search(r'If you have (?:less|more|equal) Life', action_text, re.IGNORECASE): flags["conditions"]["life_req"] = 1
+        if re.search(r'in battle', action_text, re.IGNORECASE): flags["conditions"]["battle_req"] = 1
+        if re.search(r'\{[^}]+\} type', action_text, re.IGNORECASE): flags["conditions"]["type_req"] = 1
+        if re.search(r'(?:red|blue|green|purple|black|yellow) Character', action_text, re.IGNORECASE): flags["conditions"]["color_req"] = 1
+        
+        cost_req_match = re.search(r'with a cost of (\d+)', action_text, re.IGNORECASE)
+        if cost_req_match:
+            flags["conditions"]["cost_req"] = int(cost_req_match.group(1))
+            
+        if re.search(r'by &lt;([^&]+)&gt; attribute cards', action_text, re.IGNORECASE):
+            flags["conditions"]["attribute_req"] = 1
+
+        return flags
