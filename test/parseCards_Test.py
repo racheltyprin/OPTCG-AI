@@ -29,17 +29,13 @@ def run_tests():
     with open(data_path, 'r') as f:
         raw_data = json.load(f)
     
-    # Expanded test cases
+    # Test IDs
     test_ids = [
-        "EB01-046_r1", # Brook: Cost reduction + K.O.
-        "EB01-048_r1", # Laboon: Activate: Main + Rest self cost
-        "EB01-012_r1", # Cavendish: On Play/When Attacking + Leader condition + Set DON active
-        "EB01-038_p1", # Oh Come My Way: Counter + DON -1 cost + Target change
-        "OP03-008_p2", # Buggy: Passive protection + On Play search
-        "OP04-001",    # Nefeltari Vivi (Leader): Cannot attack, Activate: Main Rush/Draw
-        "OP08-118",    # Silvers Rayleigh: Complex power reduction + K.O. threshold
-        "OP02-085_p2", # Magellan: DON!! return on Play and on K.O.
-        "OP05-098_p2"  # Enel (Leader): Life replacement effect
+        "EB01-046_r1", # Brook: Sequential (Debuff then KO)
+        "OP04-001",    # Nefeltari Vivi (Leader): Passive + Active
+        "OP08-118",    # Silvers Rayleigh: Multi-target, multi-magnitude
+        "OP02-085_p2", # Magellan: Self cost vs Opponent effect
+        "OP05-098_p2"  # Enel (Leader): Life replacement
     ]
     
     output_dir = os.path.join(root_path, 'output')
@@ -48,14 +44,15 @@ def run_tests():
     
     with open(report_path, "w") as f:
         f.write("="*100 + "\n")
-        f.write(f"{'OPTCG COMPREHENSIVE PARSER TENSOR REPORT':^100}\n")
+        f.write(f"{'OPTCG MULTI-STEP EFFECT TENSOR REPORT':^100}\n")
         f.write("="*100 + "\n\n")
         
         for data in raw_data:
             if data.get('id') not in test_ids: continue
             
             effect_text = data.get('effect', '')
-            flags = parser.parse_to_flags(effect_text)
+            steps = parser.parse_card_effects(effect_text)
+            keywords = parser.parse_keywords(effect_text)
             
             card = Card(
                 card_id=data.get('id', ''),
@@ -70,42 +67,38 @@ def run_tests():
                 types=data.get('types', []),
                 attributes=data.get('attributes', []),
                 trigger=bool(data.get('trigger')),
-                timing_flags=flags["timing"],
-                keyword_flags=flags["keywords"],
-                effect_action_flags=flags["actions"],
-                conditions=flags["conditions"],
-                cost_flags=flags["costs"]
+                keyword_flags=keywords,
+                effects=steps
             )
             
             f.write(f"CARD: {card.name} ({card.card_id})\n")
             f.write(f"ORIGINAL EFFECT:\n{effect_text}\n\n")
             
-            f.write("FLAG DICTIONARIES:\n")
+            f.write(f"GLOBAL KEYWORDS: { {k:v for k,v in card.keyword_flags.items() if v != 0} }\n")
             
-            # Helper to filter dictionaries for reporting
-            def filter_dict(d):
-                filtered = {}
-                for k, v in d.items():
+            for i, step in enumerate(card.effects):
+                f.write(f"  STEP {i}:\n")
+                f.write(f"    timing:     { {k:v for k,v in step.timing_flags.items() if v != 0} }\n")
+                f.write(f"    target:     { {k:v for k,v in step.target_flags.items() if v != 0} }\n")
+                f.write(f"    scope:      { {k:v for k,v in step.scope_flags.items() if v != 0} }\n")
+                f.write(f"    action:     { {k:v for k,v in step.action_flags.items() if v != 0} }\n")
+                
+                # Filter conditions for cost_req/power_req
+                cond_filtered = {}
+                for k, v in step.condition_flags.items():
                     if k in ["cost_req", "power_req"]:
-                        if v != -999: # Show if explicitly set, even if 0
-                            filtered[k] = v
-                    elif v != 0:
-                        filtered[k] = v
-                return filtered
-
-            f.write(f"  timing:     {filter_dict(card.timing_flags)}\n")
-            f.write(f"  keywords:   {filter_dict(card.keyword_flags)}\n")
-            f.write(f"  costs:      {filter_dict(card.cost_flags)}\n")
-            f.write(f"  actions:    {filter_dict(card.effect_action_flags)}\n")
-            f.write(f"  conditions: {filter_dict(card.conditions)}\n")
+                        if v != -999: cond_filtered[k] = v
+                    elif v != 0: cond_filtered[k] = v
+                if cond_filtered:
+                    f.write(f"    condition:  {cond_filtered}\n")
+                
+                cost_filtered = {k:v for k,v in step.cost_flags.items() if v != 0}
+                if cost_filtered:
+                    f.write(f"    cost:       {cost_filtered}\n")
             
             tensor = card.to_tensor()
-            # Replace sentinel with 0 for the tensor output
-            clean_tensor = tensor.clone()
-            clean_tensor[clean_tensor == -999] = 0
-            
             f.write(f"\nGENERATED TENSOR (Shape: {tensor.shape}):\n")
-            f.write(f"{clean_tensor}\n")
+            f.write(f"{tensor}\n")
             f.write("\n" + "-"*100 + "\n\n")
             
     print(f"Test complete. Report generated at: {report_path}")

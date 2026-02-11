@@ -1,4 +1,4 @@
-# Comprehensive keys for OPTCG card features based on provided patterns
+# Comprehensive keys for OPTCG card features based on the new Effect-Step architecture
 
 TIMING_KEYS = [
     "on_play", "when_attacking", "activate_main", "counter", 
@@ -26,8 +26,19 @@ CONDITION_KEYS = [
     "attribute_req", "power_req", "threshold_req"
 ]
 
-# New category for costs as per user feedback
 COST_KEYS = [
     "don_attach", "don_return", "don_rest", "trash_hand", 
     "trash_deck", "trash_life", "rest_self", "rest_other"
+]
+
+# New keys for Target and Scope within an Effect Step
+TARGET_KEYS = [
+    "target_self", "target_your_leader", "target_your_character", 
+    "target_opponent_leader", "target_opponent_character", "target_don",
+    "target_deck", "target_hand", "target_life"
+]
+
+SCOPE_KEYS = [
+    "scope_1", "scope_up_to_1", "scope_up_to_2", "scope_up_to_3", 
+    "scope_up_to_5", "scope_all"
 ]

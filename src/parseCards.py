@@ -5,11 +5,11 @@ from typing import Dict, List, Optional, Any
 
 # Ensure we can find featureslist in the same directory
 sys.path.append(os.path.dirname(__file__))
-from featureslist import TIMING_KEYS, KEYWORD_KEYS, ACTION_KEYS, CONDITION_KEYS, COST_KEYS
+from featureslist import TIMING_KEYS, KEYWORD_KEYS, ACTION_KEYS, CONDITION_KEYS, COST_KEYS, TARGET_KEYS, SCOPE_KEYS
+from cardDataClass import EffectStep
 
 class CardEffectParser:
     def __init__(self):
-        # 1. TIMING PATTERNS
         self.timing_patterns = {
             r'\[On Play\]': 'on_play',
             r'\[When Attacking\]': 'when_attacking',
@@ -28,7 +28,6 @@ class CardEffectParser:
             r'\[DON!! x(\d+)\]': 'don_x',
         }
         
-        # 2. KEYWORD PATTERNS (These are also passive effects)
         self.keyword_patterns = {
             r'\[Rush\]': 'rush',
             r'\[Rush: Character\]': 'rush',
@@ -39,193 +38,138 @@ class CardEffectParser:
         }
 
     def _extract_amount(self, text: str, default: int = 1) -> int:
-        """Helper to extract the first number found in a string, or return default."""
         match = re.search(r'([+−-]?\d+)', text)
         if match:
             val_str = match.group(1).replace('−', '-')
             return int(val_str)
         return default
 
-    def parse_to_flags(self, text: str) -> Dict[str, Dict[str, int]]:
-        flags = {
+    def _get_empty_step_flags(self) -> Dict[str, Dict[str, int]]:
+        return {
             "timing": {k: 0 for k in TIMING_KEYS},
-            "keywords": {k: 0 for k in KEYWORD_KEYS},
             "actions": {k: 0 for k in ACTION_KEYS},
             "conditions": {k: 0 for k in CONDITION_KEYS},
-            "costs": {k: 0 for k in COST_KEYS}
+            "costs": {k: 0 for k in COST_KEYS},
+            "targets": {k: 0 for k in TARGET_KEYS},
+            "scopes": {k: 0 for k in SCOPE_KEYS}
         }
-        
-        flags["conditions"]["cost_req"] = -999
-        flags["conditions"]["power_req"] = -999
-        
+
+    def parse_card_effects(self, text: str) -> List[EffectStep]:
         if not text or text == '-':
-            return flags
+            return []
 
-        # Clean HTML and normalize
-        text_clean = re.sub(r'<[^>]+>', ' ', text)
+        # 1. Split into logical blocks (by <br> or double newline)
+        blocks = [b.strip() for b in re.split(r'<br>|\n\n', text) if b.strip()]
+        effect_steps = []
+
+        for block in blocks:
+            # Extract timing for this block
+            block_timing = {k: 0 for k in TIMING_KEYS}
+            for pattern, key in self.timing_patterns.items():
+                match = re.search(pattern, block)
+                if match:
+                    if key == 'don_x': block_timing[key] = int(match.group(1))
+                    else: block_timing[key] = 1
+            
+            # Identify if the block is passive (no bracketed timing)
+            if not re.search(r'\[[^\]]+\]', block):
+                block_timing["passive"] = 1
+
+            # 2. Split block into sequential steps (by "Then," or periods)
+            # We use a lookahead to avoid splitting on decimal points or common abbreviations
+            steps_text = [s.strip() for s in re.split(r'\. (?=[A-Z])|Then,', block) if s.strip()]
+            
+            for step_text in steps_text:
+                # Clean timing tags from step text for action parsing
+                clean_step = re.sub(r'\[[^\]]+\]', '', step_text).strip()
+                if not clean_step: continue
+
+                step_flags = self._get_empty_step_flags()
+                step_flags["timing"] = block_timing.copy()
+                step_flags["conditions"]["cost_req"] = -999
+                step_flags["conditions"]["power_req"] = -999
+
+                # --- TARGET ATTRIBUTION ---
+                if re.search(r'your opponent', clean_step, re.IGNORECASE):
+                    if re.search(r'Character', clean_step): step_flags["targets"]["target_opponent_character"] = 1
+                    if re.search(r'Leader', clean_step): step_flags["targets"]["target_opponent_leader"] = 1
+                elif re.search(r'your (?!opponent)', clean_step, re.IGNORECASE):
+                    if re.search(r'Character', clean_step): step_flags["targets"]["target_your_character"] = 1
+                    if re.search(r'Leader', clean_step): step_flags["targets"]["target_your_leader"] = 1
+                
+                if re.search(r'this Character|this card', clean_step, re.IGNORECASE):
+                    step_flags["targets"]["target_self"] = 1
+                if re.search(r'DON!!', clean_step): step_flags["targets"]["target_don"] = 1
+                if re.search(r'deck', clean_step): step_flags["targets"]["target_deck"] = 1
+                if re.search(r'hand', clean_step): step_flags["targets"]["target_hand"] = 1
+                if re.search(r'Life', clean_step): step_flags["targets"]["target_life"] = 1
+
+                # --- SCOPE ATTRIBUTION ---
+                if re.search(r'up to 1', clean_step): step_flags["scopes"]["scope_up_to_1"] = 1
+                elif re.search(r'up to 2', clean_step): step_flags["scopes"]["scope_up_to_2"] = 1
+                elif re.search(r'up to 3', clean_step): step_flags["scopes"]["scope_up_to_3"] = 1
+                elif re.search(r'up to 5', clean_step): step_flags["scopes"]["scope_up_to_5"] = 1
+                elif re.search(r'all of your|all of their', clean_step): step_flags["scopes"]["scope_all"] = 1
+                else: step_flags["scopes"]["scope_1"] = 1
+
+                # --- COST PARSING (if step contains a colon) ---
+                if ':' in clean_step:
+                    cost_part, effect_part = clean_step.split(':', 1)
+                    self._parse_costs(cost_part, step_flags["costs"])
+                    clean_step = effect_part # Continue parsing actions from the effect part
+
+                # --- ACTION & CONDITION PARSING ---
+                self._parse_actions(clean_step, step_flags["actions"])
+                self._parse_conditions(clean_step, step_flags["conditions"])
+
+                effect_steps.append(EffectStep(
+                    timing_flags=step_flags["timing"],
+                    action_flags=step_flags["actions"],
+                    condition_flags=step_flags["conditions"],
+                    cost_flags=step_flags["costs"],
+                    target_flags=step_flags["targets"],
+                    scope_flags=step_flags["scopes"]
+                ))
+
+        return effect_steps
+
+    def _parse_costs(self, text: str, flags: Dict[str, int]):
+        if re.search(r'DON!! [−-](\d+)', text): flags["don_return"] = self._extract_amount(text)
+        if re.search(r'rest this (?:Character|card)', text, re.IGNORECASE): flags["rest_self"] = 1
+        if re.search(r'trash (\d+) card.*from your hand', text, re.IGNORECASE): flags["trash_hand"] = self._extract_amount(text)
+        if re.search(r'➁|ⓧ|➀', text): flags["don_rest"] = self._extract_amount(text)
+
+    def _parse_actions(self, text: str, flags: Dict[str, int]):
+        if re.search(r'Draw (\d+)', text, re.IGNORECASE): flags["draw"] = self._extract_amount(text)
+        if re.search(r'K\.O\.', text): flags["ko"] = 1
+        if re.search(r'Look at (\d+)', text, re.IGNORECASE): flags["look"] = self._extract_amount(text)
+        if re.search(r'reveal up to (\d+)', text, re.IGNORECASE): flags["reveal"] = self._extract_amount(text)
+        if re.search(r'add .* to your hand', text, re.IGNORECASE): flags["add_to_hand"] = 1
         
-        # --- 1. TIMING & KEYWORDS ---
-        for pattern, key in self.timing_patterns.items():
-            match = re.search(pattern, text_clean)
-            if match:
-                if key == 'don_x':
-                    flags["timing"][key] = int(match.group(1))
-                else:
-                    flags["timing"][key] = 1
-        
+        power_match = re.search(r'([+−-])(\d+) power', text, re.IGNORECASE)
+        if power_match:
+            val = int(power_match.group(2)) * (1 if power_match.group(1) == '+' else -1)
+            flags["give_power"] = val
+            
+        cost_match = re.search(r'([+−-])(\d+) cost', text, re.IGNORECASE)
+        if cost_match:
+            val = int(cost_match.group(2)) * (1 if cost_match.group(1) == '+' else -1)
+            flags["give_cost"] = val
+
+        if re.search(r'set .* as active', text, re.IGNORECASE): flags["active"] = 1
+        if re.search(r'cannot attack', text, re.IGNORECASE): flags["cannot_attack"] = 1
+        if re.search(r'gains? \[Rush\]', text, re.IGNORECASE): flags["gain_ability"] = 1
+        if re.search(r'returns? (\d+) DON!!', text, re.IGNORECASE): flags["remove_don"] = self._extract_amount(text)
+
+    def _parse_conditions(self, text: str, flags: Dict[str, int]):
+        if re.search(r'If your Leader', text, re.IGNORECASE): flags["leader_req"] = 1
+        if re.search(r'with a cost of (\d+)', text, re.IGNORECASE): flags["cost_req"] = int(re.search(r'with a cost of (\d+)', text, re.IGNORECASE).group(1))
+        if re.search(r'with (\d+) power or less', text, re.IGNORECASE): flags["power_req"] = int(re.search(r'with (\d+) power or less', text, re.IGNORECASE).group(1))
+        if re.search(r'\{[^}]+\} type', text, re.IGNORECASE): flags["type_req"] = 1
+
+    def parse_keywords(self, text: str) -> Dict[str, int]:
+        flags = {k: 0 for k in KEYWORD_KEYS}
         for pattern, key in self.keyword_patterns.items():
-            if re.search(pattern, text_clean):
-                flags["keywords"][key] = 1
-                # Keywords like Banish, Double Attack, Rush, Blocker are passive effects
-                flags["timing"]["passive"] = 1
-
-        # --- 2. PASSIVE DETECTION (Sentences) ---
-        sentences = [s.strip() for s in re.split(r'<br>|\. (?=\[|This|Your|Opponent|If|All)', text_clean) if s.strip()]
-        for sentence in sentences:
-            if not sentence.startswith('[') and not re.search(r'^Then,', sentence):
-                if re.search(r'cannot|must|gain|is|has|If|can attack', sentence, re.IGNORECASE):
-                    flags["timing"]["passive"] = 1
-                    break
-
-        # --- 3. SPLIT INTO COST AND EFFECT ---
-        cost_split_match = re.search(r'([^:]*(?:DON!! [−-]\d+|rest this Character|ⓧ|➀|➁|trash \d+ card.*from your hand))[:]', text_clean, re.IGNORECASE)
-        
-        if cost_split_match:
-            cost_part = cost_split_match.group(1)
-            effect_part = text_clean[cost_split_match.end():]
-        else:
-            don_return_match = re.search(r'DON!! [−-]\d+', text_clean)
-            if don_return_match:
-                cost_part = don_return_match.group(0)
-                effect_part = text_clean
-            else:
-                cost_part = ""
-                effect_part = text_clean
-
-        # --- 4. COST PARSING ---
-        if cost_part:
-            if re.search(r'DON!! x(\d+)', cost_part): 
-                flags["costs"]["don_attach"] = self._extract_amount(re.search(r'DON!! x(\d+)', cost_part).group(0))
-            don_minus = re.search(r'DON!! [−-](\d+)', cost_part)
-            if don_minus: 
-                flags["costs"]["don_return"] = int(don_minus.group(1))
-            if re.search(r'[ⓧ➀➁]|rest \d+ of your DON!!', cost_part):
-                if 'ⓧ' in cost_part or '➀' in cost_part: flags["costs"]["don_rest"] = 1
-                elif '➁' in cost_part: flags["costs"]["don_rest"] = 2
-                else: flags["costs"]["don_rest"] = self._extract_amount(cost_part)
-            if re.search(r'trash (\d+) card.*from your hand', cost_part, re.IGNORECASE):
-                flags["costs"]["trash_hand"] = self._extract_amount(cost_part)
-            if re.search(r'trash (\d+) card.*from (?:the top of )?your deck', cost_part, re.IGNORECASE):
-                flags["costs"]["trash_deck"] = self._extract_amount(cost_part)
-            if re.search(r'trash (\d+) card.*from your Life', cost_part, re.IGNORECASE):
-                flags["costs"]["trash_life"] = self._extract_amount(cost_part)
-            if re.search(r'rest this (?:Character|Stage|card)', cost_part, re.IGNORECASE):
-                flags["costs"]["rest_self"] = 1
-            if re.search(r'rest (\d+) of your (?:Characters|cards)', cost_part, re.IGNORECASE):
-                flags["costs"]["rest_other"] = self._extract_amount(cost_part)
-
-        # --- 5. ACTION PARSING ---
-        action_text = re.sub(r'\[[^\]]+\]', '', text_clean)
-        
-        if re.search(r'\bDraw (\d+) card', action_text, re.IGNORECASE):
-            flags["actions"]["draw"] = self._extract_amount(re.search(r'\bDraw (\d+) card', action_text, re.IGNORECASE).group(0))
-        if re.search(r'Look at (\d+) cards', action_text, re.IGNORECASE):
-            flags["actions"]["look"] = self._extract_amount(re.search(r'Look at (\d+) cards', action_text, re.IGNORECASE).group(0))
-        if re.search(r'reveal up to (\d+)', action_text, re.IGNORECASE):
-            flags["actions"]["reveal"] = self._extract_amount(re.search(r'reveal up to (\d+)', action_text, re.IGNORECASE).group(0))
-        if re.search(r'add .* to your hand', action_text, re.IGNORECASE):
-            flags["actions"]["add_to_hand"] = 1
-        if re.search(r'place .* at (?:the )?(?:top|bottom) of (?:your |your opponent\'s )?deck', action_text, re.IGNORECASE):
-            flags["actions"]["place_deck"] = 1
-        if re.search(r'shuffle (?:your |your opponent\'s )?deck', action_text, re.IGNORECASE):
-            flags["actions"]["shuffle"] = 1
-        if re.search(r'\bPlay up to (\d+)', action_text, re.IGNORECASE):
-            flags["actions"]["play"] = self._extract_amount(re.search(r'\bPlay up to (\d+)', action_text, re.IGNORECASE).group(0))
-        if re.search(r'\bRest (?:up to (\d+)|all|the)', action_text, re.IGNORECASE):
-            match = re.search(r'\bRest (?:up to (\d+)|all|the)', action_text, re.IGNORECASE)
-            flags["actions"]["rest"] = 99 if 'all' in match.group(0).lower() else self._extract_amount(match.group(0))
-        if re.search(r'Set (?:up to (\d+)|all|the) .* as active', action_text, re.IGNORECASE):
-            match = re.search(r'Set (?:up to (\d+)|all|the) .* as active', action_text, re.IGNORECASE)
-            flags["actions"]["active"] = 99 if 'all' in match.group(0).lower() else self._extract_amount(match.group(0))
-        if re.search(r'\bK\.O\.', action_text) and not re.search(r'cannot be K\.O\.\'d', action_text, re.IGNORECASE):
-            match = re.search(r'K\.O\. (?:up to (\d+)|all|the)', action_text, re.IGNORECASE)
-            flags["actions"]["ko"] = self._extract_amount(match.group(0)) if match else 1
-        if re.search(r'Remove .* from the field', action_text, re.IGNORECASE):
-            flags["actions"]["remove_field"] = 1
-        if re.search(r'Return .* to (?:the )?owner\'s hand', action_text, re.IGNORECASE):
-            flags["actions"]["return_to_hand"] = 1
-        if re.search(r'Add (\d+) card.* to (?:the )?(?:top|bottom) of .* Life', action_text, re.IGNORECASE):
-            flags["actions"]["add_life"] = self._extract_amount(re.search(r'Add (\d+) card.* to (?:the )?(?:top|bottom) of .* Life', action_text, re.IGNORECASE).group(0))
-        if re.search(r'trash (\d+) card.* from .* Life', action_text, re.IGNORECASE):
-            flags["actions"]["trash_life"] = self._extract_amount(re.search(r'trash (\d+) card.* from .* Life', action_text, re.IGNORECASE).group(0))
-        if re.search(r'Look at (\d+) card.* from .* Life', action_text, re.IGNORECASE):
-            flags["actions"]["look_life"] = self._extract_amount(re.search(r'Look at (\d+) card.* from .* Life', action_text, re.IGNORECASE).group(0))
-        
-        # Power/Cost mods
-        power_matches = re.findall(r'([+−-])(\d+) power', action_text, re.IGNORECASE)
-        if power_matches:
-            total_power = 0
-            for sign, val in power_matches:
-                total_power += int(val) * (1 if sign == '+' else -1)
-            flags["actions"]["give_power"] = total_power
-            
-        cost_matches = re.findall(r'([+−-])(\d+) cost', action_text, re.IGNORECASE)
-        if cost_matches:
-            total_cost = 0
-            for sign, val in cost_matches:
-                total_cost += int(val) * (1 if sign == '+' else -1)
-            flags["actions"]["give_cost"] = total_cost
-        
-        if re.search(r'set up to (\d+) of your DON!! cards as active', action_text, re.IGNORECASE):
-            flags["actions"]["set_don"] = self._extract_amount(re.search(r'set up to (\d+) of your DON!! cards as active', action_text, re.IGNORECASE).group(0))
-        elif re.search(r'Set up to (\d+) of your DON!! cards as active', action_text, re.IGNORECASE):
-            flags["actions"]["set_don"] = self._extract_amount(re.search(r'Set up to (\d+) of your DON!! cards as active', action_text, re.IGNORECASE).group(0))
-        if re.search(r'Add up to (\d+) DON!! card.* from your DON!! deck', action_text, re.IGNORECASE):
-            flags["actions"]["add_don"] = self._extract_amount(re.search(r'Add up to (\d+) DON!! card.* from your DON!! deck', action_text, re.IGNORECASE).group(0))
-        if re.search(r'return (\d+) DON!! card.* to your DON!! deck', action_text, re.IGNORECASE):
-            flags["actions"]["remove_don"] = self._extract_amount(re.search(r'return (\d+) DON!! card.* to your DON!! deck', action_text, re.IGNORECASE).group(0))
-        if re.search(r'Give .* up to (\d+) .* DON!! card', action_text, re.IGNORECASE):
-            flags["actions"]["attach_don"] = self._extract_amount(re.search(r'Give .* up to (\d+) .* DON!! card', action_text, re.IGNORECASE).group(0))
-        
-        if re.search(r'gains? \[?(?:Rush|Blocker|Double Attack|Banish|Unblockable)\]?', action_text, re.IGNORECASE):
-            flags["actions"]["gain_ability"] = 1
-        if re.search(r'cannot attack', action_text, re.IGNORECASE):
-            flags["actions"]["cannot_attack"] = 1
-        if re.search(r'cannot be K\.O\.\'d', action_text, re.IGNORECASE):
-            flags["actions"]["cannot_be_ko"] = 1
-        if re.search(r'must attack', action_text, re.IGNORECASE):
-            flags["actions"]["must_attack"] = 1
-        if re.search(r'Change the attack target', action_text, re.IGNORECASE):
-            flags["actions"]["change_target"] = 1
-        if re.search(r'cannot be removed from the field', action_text, re.IGNORECASE):
-            flags["actions"]["cannot_be_removed"] = 1
-        if re.search(r'can attack Characters on the turn in which (?:it is|they are) played', action_text, re.IGNORECASE):
-            flags["actions"]["can_attack_played_turn"] = 1
-
-        # --- 6. CONDITION PARSING ---
-        if re.search(r'If your Leader', action_text, re.IGNORECASE): flags["conditions"]["leader_req"] = 1
-        if re.search(r'If you have (\d+) or (?:less|more) (?:cards|Life|DON!!)', action_text, re.IGNORECASE):
-            flags["conditions"]["count_req"] = self._extract_amount(action_text)
-        if re.search(r'If the number of DON!!', action_text, re.IGNORECASE): flags["conditions"]["don_req"] = 1
-        if re.search(r'If you have (?:no other|a) .* Character', action_text, re.IGNORECASE): flags["conditions"]["character_req"] = 1
-        if re.search(r'If you have (?:less|more|equal) Life', action_text, re.IGNORECASE): flags["conditions"]["life_req"] = 1
-        if re.search(r'in battle', action_text, re.IGNORECASE): flags["conditions"]["battle_req"] = 1
-        if re.search(r'\{[^}]+\} type', action_text, re.IGNORECASE): flags["conditions"]["type_req"] = 1
-        if re.search(r'(?:red|blue|green|purple|black|yellow) Character', action_text, re.IGNORECASE): flags["conditions"]["color_req"] = 1
-        
-        cost_req_match = re.search(r'with a cost of (\d+)', action_text, re.IGNORECASE)
-        if cost_req_match:
-            flags["conditions"]["cost_req"] = int(cost_req_match.group(1))
-            
-        power_req_match = re.search(r'with (\d+) power or less', action_text, re.IGNORECASE)
-        if power_req_match:
-            flags["conditions"]["power_req"] = int(power_req_match.group(1))
-            
-        threshold_match = re.search(r'(\d+) or (?:more|less) cards in your trash', action_text, re.IGNORECASE)
-        if threshold_match:
-            flags["conditions"]["threshold_req"] = int(threshold_match.group(1))
-            
-        if re.search(r'by &lt;([^&]+)&gt; attribute cards', action_text, re.IGNORECASE):
-            flags["conditions"]["attribute_req"] = 1
-
+            if re.search(pattern, text):
+                flags[key] = 1
         return flags
