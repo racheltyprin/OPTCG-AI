@@ -22,7 +22,8 @@ ACTION_KEYS = [
 
 CONDITION_KEYS = [
     "leader_req", "count_req", "don_req", "character_req", 
-    "life_req", "battle_req", "type_req", "color_req", "cost_req", "attribute_req"
+    "life_req", "battle_req", "type_req", "color_req", "cost_req", 
+    "attribute_req", "power_req", "threshold_req"
 ]
 
 # New category for costs as per user feedback

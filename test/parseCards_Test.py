@@ -29,13 +29,17 @@ def run_tests():
     with open(data_path, 'r') as f:
         raw_data = json.load(f)
     
-    # Test a wider variety of cards to verify the new patterns
+    # Expanded test cases
     test_ids = [
         "EB01-046_r1", # Brook: Cost reduction + K.O.
         "EB01-048_r1", # Laboon: Activate: Main + Rest self cost
         "EB01-012_r1", # Cavendish: On Play/When Attacking + Leader condition + Set DON active
         "EB01-038_p1", # Oh Come My Way: Counter + DON -1 cost + Target change
         "OP03-008_p2", # Buggy: Passive protection + On Play search
+        "OP04-001",    # Nefeltari Vivi (Leader): Cannot attack, Activate: Main Rush/Draw
+        "OP08-118",    # Silvers Rayleigh: Complex power reduction + K.O. threshold
+        "OP02-085_p2", # Magellan: DON!! return on Play and on K.O.
+        "OP05-098_p2"  # Enel (Leader): Life replacement effect
     ]
     
     output_dir = os.path.join(root_path, 'output')
@@ -82,7 +86,7 @@ def run_tests():
             def filter_dict(d):
                 filtered = {}
                 for k, v in d.items():
-                    if k == "cost_req":
+                    if k in ["cost_req", "power_req"]:
                         if v != -999: # Show if explicitly set, even if 0
                             filtered[k] = v
                     elif v != 0:
@@ -98,10 +102,6 @@ def run_tests():
             tensor = card.to_tensor()
             # Replace sentinel with 0 for the tensor output
             clean_tensor = tensor.clone()
-            # We know cost_req is the last element of conditions, which is the last part of the tensor
-            # 3 (numeric) + 16 (timing) + 5 (keywords) + 26 (actions) + 10 (conditions) + 8 (costs) = 68
-            # Wait, the order in to_tensor is numeric + flags (timing + keywords + actions + conds + costs)
-            # Let's just replace all -999 with 0 for the display tensor
             clean_tensor[clean_tensor == -999] = 0
             
             f.write(f"\nGENERATED TENSOR (Shape: {tensor.shape}):\n")

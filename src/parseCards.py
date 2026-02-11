@@ -56,6 +56,7 @@ class CardEffectParser:
         }
         
         flags["conditions"]["cost_req"] = -999
+        flags["conditions"]["power_req"] = -999
         
         if not text or text == '-':
             return flags
@@ -79,12 +80,9 @@ class CardEffectParser:
                 flags["timing"]["passive"] = 1
 
         # --- 2. PASSIVE DETECTION (Sentences) ---
-        # Split by <br> or periods that are NOT inside brackets or followed by "Then"
         sentences = [s.strip() for s in re.split(r'<br>|\. (?=\[|This|Your|Opponent|If|All)', text_clean) if s.strip()]
         for sentence in sentences:
-            # If a sentence starts without a bracketed timing, it's likely a passive effect
             if not sentence.startswith('[') and not re.search(r'^Then,', sentence):
-                # Check if it contains actual game actions or conditions
                 if re.search(r'cannot|must|gain|is|has|If|can attack', sentence, re.IGNORECASE):
                     flags["timing"]["passive"] = 1
                     break
@@ -163,14 +161,20 @@ class CardEffectParser:
         if re.search(r'Look at (\d+) card.* from .* Life', action_text, re.IGNORECASE):
             flags["actions"]["look_life"] = self._extract_amount(re.search(r'Look at (\d+) card.* from .* Life', action_text, re.IGNORECASE).group(0))
         
-        power_match = re.search(r'([+−-])(\d+) power', action_text, re.IGNORECASE)
-        if power_match:
-            val = int(power_match.group(2)) * (1 if power_match.group(1) == '+' else -1)
-            flags["actions"]["give_power"] = val
-        cost_match = re.search(r'([+−-])(\d+) cost', action_text, re.IGNORECASE)
-        if cost_match:
-            val = int(cost_match.group(2)) * (1 if cost_match.group(1) == '+' else -1)
-            flags["actions"]["give_cost"] = val
+        # Power/Cost mods
+        power_matches = re.findall(r'([+−-])(\d+) power', action_text, re.IGNORECASE)
+        if power_matches:
+            total_power = 0
+            for sign, val in power_matches:
+                total_power += int(val) * (1 if sign == '+' else -1)
+            flags["actions"]["give_power"] = total_power
+            
+        cost_matches = re.findall(r'([+−-])(\d+) cost', action_text, re.IGNORECASE)
+        if cost_matches:
+            total_cost = 0
+            for sign, val in cost_matches:
+                total_cost += int(val) * (1 if sign == '+' else -1)
+            flags["actions"]["give_cost"] = total_cost
         
         if re.search(r'set up to (\d+) of your DON!! cards as active', action_text, re.IGNORECASE):
             flags["actions"]["set_don"] = self._extract_amount(re.search(r'set up to (\d+) of your DON!! cards as active', action_text, re.IGNORECASE).group(0))
@@ -212,6 +216,14 @@ class CardEffectParser:
         cost_req_match = re.search(r'with a cost of (\d+)', action_text, re.IGNORECASE)
         if cost_req_match:
             flags["conditions"]["cost_req"] = int(cost_req_match.group(1))
+            
+        power_req_match = re.search(r'with (\d+) power or less', action_text, re.IGNORECASE)
+        if power_req_match:
+            flags["conditions"]["power_req"] = int(power_req_match.group(1))
+            
+        threshold_match = re.search(r'(\d+) or (?:more|less) cards in your trash', action_text, re.IGNORECASE)
+        if threshold_match:
+            flags["conditions"]["threshold_req"] = int(threshold_match.group(1))
             
         if re.search(r'by &lt;([^&]+)&gt; attribute cards', action_text, re.IGNORECASE):
             flags["conditions"]["attribute_req"] = 1

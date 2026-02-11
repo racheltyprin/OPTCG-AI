@@ -1,5 +1,5 @@
 from dataclasses import dataclass, field
-from typing import List, Dict
+from typing import List, Dict, Optional
 import torch
 import sys
 import os
@@ -39,7 +39,7 @@ class Card:
     conditions: Dict[str, int]
     cost_flags: Dict[str, int] = field(default_factory=dict)
 
-    learned_embedding: torch.Tensor | None = field(default=None)
+    learned_embedding: Optional[torch.Tensor] = field(default=None)
 
     def numeric_features(self) -> torch.Tensor:
         return torch.tensor([
@@ -53,7 +53,15 @@ class Card:
         timing = [float(self.timing_flags.get(k, 0)) for k in TIMING_KEYS]
         keywords = [float(self.keyword_flags.get(k, 0)) for k in KEYWORD_KEYS]
         actions = [float(self.effect_action_flags.get(k, 0)) for k in ACTION_KEYS]
-        conds = [float(self.conditions.get(k, 0)) for k in CONDITION_KEYS]
+        
+        # Special handling for cost_req and power_req to replace sentinel -999 with 0
+        conds = []
+        for k in CONDITION_KEYS:
+            val = float(self.conditions.get(k, 0))
+            if val == -999:
+                val = 0.0
+            conds.append(val)
+            
         costs = [float(self.cost_flags.get(k, 0)) for k in COST_KEYS]
 
         return torch.tensor(
